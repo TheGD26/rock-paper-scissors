@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rock Paper Scissors</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app" class="container" v-cloak>
+  <header class="brand">
+    <div class="logo" aria-hidden="true">✊✋✌️</div>
+    <h1>Rock Paper Scissors</h1>
+    <p class="tagline">Best of forever. Can you outsmart the machine?</p>
+  </header>
+
+  <!-- Setup screen -->
+  <section v-if="!game" class="card setup">
+    <h2>New game</h2>
+
+    <label class="field">
+      <span>Your name</span>
+      <input v-model.trim="playerName" placeholder="Player" maxlength="24" autofocus @keyup.enter="startGame">
+    </label>
+
+    <div class="field">
+      <span>Difficulty</span>
+      <div class="segmented" role="radiogroup" aria-label="Difficulty">
+        <button v-for="d in difficulties" :key="d.value" type="button" role="radio"
+                :aria-checked="difficulty === d.value" :class="{ active: difficulty === d.value }"
+                @click="difficulty = d.value">
+          <strong>{{ d.label }}</strong>
+          <small>{{ d.hint }}</small>
+        </button>
+      </div>
+    </div>
+
+    <button class="btn primary block" :disabled="busy" @click="startGame">
+      {{ busy ? 'Starting…' : 'Start game' }}
+    </button>
+  </section>
+
+  <!-- Game screen -->
+  <section v-else class="card game">
+    <div class="matchup">
+      <div class="player">
+        <span class="avatar">{{ initial }}</span>
+        <b>{{ game.playerName }}</b>
+      </div>
+      <span class="versus">VS</span>
+      <div class="player right">
+        <b>Computer</b>
+        <span class="avatar bot">🤖</span>
+      </div>
+    </div>
+    <p class="opponent-tag"><span class="pill">{{ game.opponent }}</span></p>
+
+    <div class="score">
+      <div class="stat win"><span>{{ game.wins }}</span>Wins</div>
+      <div class="stat draw"><span>{{ game.draws }}</span>Draws</div>
+      <div class="stat lose"><span>{{ game.losses }}</span>Losses</div>
+    </div>
+
+    <div class="meta" v-if="totalRounds">
+      <span>Win rate <b>{{ winRate }}%</b></span>
+      <span v-if="streak.count >= 2" class="streak" :class="streak.outcome.toLowerCase()">
+        {{ streakLabel }}
+      </span>
+      <span>Round <b>{{ totalRounds }}</b></span>
+    </div>
+
+    <!-- Arena -->
+    <div class="arena" :class="arenaClass">
+      <div class="faceoff">
+        <div class="hand" :class="{ shaking }">
+          <span>{{ shaking ? '✊' : (last ? emoji(last.playerMove) : '❔') }}</span>
+          <small>You</small>
+        </div>
+        <span class="vs-dot">vs</span>
+        <div class="hand mirror" :class="{ shaking }">
+          <span>{{ shaking ? '✊' : (last ? emoji(last.computerMove) : '❔') }}</span>
+          <small>Computer</small>
+        </div>
+      </div>
+      <h2 class="verdict" :key="verdictKey">
+        <template v-if="shaking">Rock… paper… scissors…</template>
+        <template v-else-if="last">{{ message(last.outcome) }}</template>
+        <template v-else>Make your move</template>
+      </h2>
+    </div>
+
+    <div class="moves">
+      <button v-for="(m, i) in moves" :key="m.value" class="move"
+              :class="{ picked: !shaking && last && last.playerMove === m.value, pending: shaking && picked === m.value }"
+              :disabled="busy" @click="play(m.value)" :aria-label="m.label + ' (key ' + m.key + ')'">
+        <span class="emoji">{{ m.emoji }}</span>
+        <span class="label">{{ m.label }}</span>
+        <kbd>{{ m.key }}</kbd>
+      </button>
+    </div>
+
+    <div class="actions">
+      <button class="btn ghost" :disabled="busy || !totalRounds" @click="reset">↺ Reset score</button>
+      <button class="btn ghost" :disabled="busy" @click="game = null">⚙ Change settings</button>
+    </div>
+
+    <div v-if="game.history.length" class="history">
+      <h3>History</h3>
+      <ol>
+        <li v-for="r in [...game.history].reverse()" :key="r.number" :class="r.outcome.toLowerCase()">
+          <span class="num">#{{ r.number }}</span>
+          <span class="pair">{{ emoji(r.playerMove) }} <small>vs</small> {{ emoji(r.computerMove) }}</span>
+          <span class="badge">{{ outcomeLabel(r.outcome) }}</span>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <footer class="hint" v-if="game">Tip: press <kbd>R</kbd> <kbd>P</kbd> <kbd>S</kbd> to play</footer>
+
+  <transition name="toast">
+    <p v-if="error" class="toast" role="alert" @click="error = ''">{{ error }}</p>
+  </transition>
+</div>
+
+<script>
+const { createApp } = Vue;
+
+const MOVES = [
+  { value: 'ROCK', label: 'Rock', emoji: '✊', key: 'R' },
+  { value: 'PAPER', label: 'Paper', emoji: '✋', key: 'P' },
+  { value: 'SCISSORS', label: 'Scissors', emoji: '✌️', key: 'S' }
+];
+
+const DIFFICULTIES = [
+  { value: 'EASY', label: 'Easy', hint: 'Computer plays at random' },
+  { value: 'HARD', label: 'Hard', hint: 'Computer learns your habits' }
+];
+
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SHAKE_MS = REDUCED_MOTION ? 0 : 900;
+
+createApp({
+  data() {
+    return {
+      playerName: '', difficulty: 'EASY', game: null, busy: false, error: '',
+      shaking: false, picked: null, moves: MOVES, difficulties: DIFFICULTIES
+    };
+  },
+  computed: {
+    last() {
+      return this.game && this.game.lastRound;
+    },
+    initial() {
+      return (this.game.playerName || 'P').charAt(0).toUpperCase();
+    },
+    totalRounds() {
+      return this.game ? this.game.history.length : 0;
+    },
+    winRate() {
+      return this.totalRounds ? Math.round(100 * this.game.wins / this.totalRounds) : 0;
+    },
+    streak() {
+      const h = this.game.history;
+      if (!h.length) return { outcome: null, count: 0 };
+      const outcome = h[h.length - 1].outcome;
+      let count = 0;
+      for (let i = h.length - 1; i >= 0 && h[i].outcome === outcome; i--) count++;
+      return { outcome, count };
+    },
+    streakLabel() {
+      const { outcome, count } = this.streak;
+      return { WIN: `🔥 ${count} win streak`, LOSE: `🥶 ${count} losses in a row`, DRAW: `🤝 ${count} draws in a row` }[outcome];
+    },
+    arenaClass() {
+      if (this.shaking || !this.last) return 'idle';
+      return this.last.outcome.toLowerCase();
+    },
+    verdictKey() {
+      return this.shaking ? 'shaking' : this.totalRounds;
+    }
+  },
+  mounted() {
+    window.addEventListener('keydown', this.onKey);
+  },
+  unmounted() {
+    window.removeEventListener('keydown', this.onKey);
+  },
+  methods: {
+    async api(path, body) {
+      this.error = '';
+      const res = await fetch('/api/games' + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+      return res.json();
+    },
+    async run(task) {
+      if (this.busy) return;
+      this.busy = true;
+      try {
+        await task();
+      } catch (e) {
+        this.error = e.message;
+        clearTimeout(this.errorTimer);
+        this.errorTimer = setTimeout(() => (this.error = ''), 4000);
+      } finally {
+        this.busy = false;
+        this.shaking = false;
+      }
+    },
+    startGame() {
+      return this.run(async () => {
+        this.game = await this.api('', { playerName: this.playerName, difficulty: this.difficulty });
+      });
+    },
+    play(move) {
+      return this.run(async () => {
+        this.picked = move;
+        this.shaking = SHAKE_MS > 0;
+        const [state] = await Promise.all([
+          this.api(`/${this.game.gameId}/play`, { move }),
+          new Promise(r => setTimeout(r, SHAKE_MS))
+        ]);
+        this.game = state;
+      });
+    },
+    reset() {
+      return this.run(async () => {
+        this.game = await this.api(`/${this.game.gameId}/reset`);
+      });
+    },
+    onKey(e) {
+      if (!this.game || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.target.matches && e.target.matches('input, select, textarea')) return;
+      const k = e.key.toUpperCase();
+      const m = MOVES.find((m, i) => m.key === k || String(i + 1) === k);
+      if (m) this.play(m.value);
+    },
+    emoji(move) {
+      return MOVES.find(m => m.value === move).emoji;
+    },
+    message(outcome) {
+      return { WIN: 'You win! 🎉', LOSE: 'You lose 😢', DRAW: "It's a draw 🤝" }[outcome];
+    },
+    outcomeLabel(outcome) {
+      return { WIN: 'Win', LOSE: 'Loss', DRAW: 'Draw' }[outcome];
+    }
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
