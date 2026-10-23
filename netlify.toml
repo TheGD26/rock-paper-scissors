@@ -1,0 +1,11 @@
+# Netlify serves only the static frontend; the Java API runs on Render.
+[build]
+  publish = "src/main/resources/static"
+
+# Proxy API calls to the Render backend.
+# Replace RENDER_APP_NAME with your Render service name.
+[[redirects]]
+  from = "/api/*"
+  to = "https://RENDER_APP_NAME.onrender.com/api/:splat"
+  status = 200
+  force = true
